@@ -1,0 +1,10 @@
+{
+  "name": "Cano — The Voice of Can Boga",
+  "description": "A sophisticated, multilingual voice assistant representing Can Boga in luxury marketing, customer experience, and international management.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
