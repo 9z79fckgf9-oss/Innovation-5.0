@@ -4,7 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { WebSocketServer, WebSocket } from 'ws';
-import { GoogleGenAI, Modality, ThinkingLevel, type LiveServerMessage } from '@google/genai';
+import { GoogleGenAI, Modality, type LiveServerMessage } from '@google/genai';
 
 dotenv.config();
 
@@ -149,7 +149,7 @@ app.get('/api/profile', (_req, res) => {
   });
 });
 
-// Text + Audio conversational endpoint with Gemini 3.8 Flash + TTS
+// Robust conversational endpoint with 2.5s fast timeout failover
 app.post('/api/chat', async (req, res) => {
   try {
     const { message, history = [], voice = 'Fenrir' } = req.body;
@@ -157,30 +157,73 @@ app.post('/api/chat', async (req, res) => {
       return res.status(400).json({ error: 'Message is required' });
     }
 
-    const conversationContents = [
-      ...history.slice(-6).map((turn: { role: string; content: string }) => ({
-        role: turn.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: turn.content }],
-      })),
-      {
-        role: 'user',
-        parts: [{ text: message }],
-      },
-    ];
+    // Clean and validate turns: must begin with a user turn, and avoid duplicate roles
+    const validTurns: { role: 'user' | 'model'; parts: [{ text: string }] }[] = [];
+    if (Array.isArray(history)) {
+      for (const turn of history.slice(-6)) {
+        if (!turn.content || typeof turn.content !== 'string') continue;
+        const role = turn.role === 'assistant' ? 'model' : 'user';
 
-    // Generate concise witty response from gemini-3.8-flash with low thinking latency
-    const chatResponse = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: conversationContents,
-      config: {
-        systemInstruction: CANO_SYSTEM_PROMPT,
-        temperature: 0.7,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-      },
+        if (validTurns.length === 0 && role !== 'user') {
+          continue;
+        }
+
+        if (validTurns.length > 0 && validTurns[validTurns.length - 1].role === role) {
+          continue;
+        }
+
+        validTurns.push({
+          role,
+          parts: [{ text: turn.content }],
+        });
+      }
+    }
+
+    if (validTurns.length > 0 && validTurns[validTurns.length - 1].role === 'user') {
+      validTurns.pop();
+    }
+
+    validTurns.push({
+      role: 'user',
+      parts: [{ text: message }],
     });
 
-    const replyText =
-      chatResponse.text?.trim() || 'Indeed. A true pleasure to converse with you.';
+    let replyText = '';
+
+    // Fast generation function with timeout
+    const generateWithModel = (modelName: string): Promise<string> => {
+      return ai.models
+        .generateContent({
+          model: modelName,
+          contents: validTurns,
+          config: {
+            systemInstruction: CANO_SYSTEM_PROMPT,
+            temperature: 0.7,
+          },
+        })
+        .then((r) => r.text?.trim() || '');
+    };
+
+    // Try primary gemini-3.8-flash; if it takes > 2.5s or fails with 503 high demand, use gemini-3.1-flash-lite immediately!
+    try {
+      const primaryPromise = generateWithModel('gemini-3.8-flash');
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('primary_timeout')), 2500)
+      );
+      replyText = await Promise.race([primaryPromise, timeoutPromise]);
+    } catch (primaryErr: any) {
+      console.warn('Fast failover triggered from primary model:', primaryErr?.message);
+      try {
+        replyText = await generateWithModel('gemini-3.1-flash-lite');
+      } catch (fallbackErr: any) {
+        console.error('Fallback model error:', fallbackErr?.message);
+        replyText = 'Indeed. A truly intriguing thought. Shall we delve further?';
+      }
+    }
+
+    if (!replyText) {
+      replyText = 'Naturally. A refined and distinguished perspective.';
+    }
 
     // Generate audio in Cano's deep voice using gemini-3.8-flash-lite-tts
     let audioBase64: string | null = null;
@@ -286,7 +329,6 @@ wss.on('connection', async (clientWs: WebSocket, request: http.IncomingMessage) 
 
           const serverContent = liveMsg.serverContent as any;
           if (serverContent) {
-            // Check for transcription
             const transcription = serverContent.outputTranscription?.text;
             if (transcription) {
               clientWs.send(
@@ -297,7 +339,6 @@ wss.on('connection', async (clientWs: WebSocket, request: http.IncomingMessage) 
               );
             }
 
-            // Check for audio or text in modelTurn
             if (serverContent.modelTurn?.parts) {
               for (const part of serverContent.modelTurn.parts) {
                 if (part.inlineData?.data) {
@@ -371,7 +412,6 @@ wss.on('connection', async (clientWs: WebSocket, request: http.IncomingMessage) 
           },
         });
       } else if (data.type === 'text' && data.text && session) {
-        // In Live API, sendRealtimeInput triggers an immediate response
         session.sendRealtimeInput({
           text: data.text,
         });

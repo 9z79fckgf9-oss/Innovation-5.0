@@ -261,7 +261,7 @@ export const ConversationalConsole: React.FC<ConversationalConsoleProps> = ({
           onChange={(e) => setInputText(e.target.value)}
           placeholder={isRecording ? 'Listening to your speech...' : 'Speak or write to Cano in English, German, or French...'}
           disabled={isLoading}
-          className="flex-1 bg-[#0d172e] border border-[#1e325c] focus:border-[#dfb87a] rounded-xl px-4 py-3 text-sm text-[#f1f5f9] placeholder-[#64748b] focus:outline-none transition-colors"
+          className="flex-1 bg-[#0d172e] border border-[#1e325c] focus:border-[#dfb87a] rounded-xl px-4 py-3 text-base sm:text-sm text-[#f1f5f9] placeholder-[#64748b] focus:outline-none transition-colors"
         />
 
         <button

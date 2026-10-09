@@ -54,26 +54,47 @@ export default function App() {
 
       setIsChatLoading(true);
 
+      // Pre-unlock audio on mobile user touch/gesture
       try {
-        const res = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            message: text,
-            voice: selectedVoice,
-            history: messages.slice(-6).map((m) => ({
-              role: m.role,
-              content: m.content,
-            })),
-          }),
-        });
+        const dummyAudio = new Audio();
+        dummyAudio.play().catch(() => {});
+      } catch (e) {}
 
-        if (!res.ok) {
-          throw new Error(`Server responded with ${res.status}`);
+      let data: any = null;
+      let lastError: any = null;
+
+      // Automatic retry once on network interruption
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const res = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              message: text,
+              voice: selectedVoice,
+              history: messages.slice(-6).map((m) => ({
+                role: m.role,
+                content: m.content,
+              })),
+            }),
+          });
+
+          if (res.ok) {
+            data = await res.json();
+            break;
+          } else {
+            throw new Error(`Server responded with ${res.status}`);
+          }
+        } catch (attemptErr) {
+          lastError = attemptErr;
+          if (attempt === 0) {
+            await new Promise((r) => setTimeout(r, 600));
+          }
         }
+      }
 
-        const data = await res.json();
-        const replyText = data.text || 'Naturally. A refined point of view.';
+      if (data && data.text) {
+        const replyText = data.text;
         const audioBase64 = data.audio;
 
         const assistantMsg: ChatMessage = {
@@ -90,8 +111,8 @@ export default function App() {
         if (audioBase64) {
           playWavBase64(audioBase64);
         }
-      } catch (err: any) {
-        console.error('Chat error:', err);
+      } else {
+        console.error('Chat error after retries:', lastError);
         setMessages((prev) => [
           ...prev,
           {
@@ -102,9 +123,8 @@ export default function App() {
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           },
         ]);
-      } finally {
-        setIsChatLoading(false);
       }
+      setIsChatLoading(false);
     },
     [liveStatus.isConnected, messages, selectedVoice]
   );
